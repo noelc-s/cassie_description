@@ -23,6 +23,12 @@
 */
 
 #include <cassie_description/cassie_model.hpp>
+#include "pinocchio/parsers/urdf.hpp"
+#include "pinocchio/algorithm/joint-configuration.hpp"
+#include "pinocchio/algorithm/kinematics.hpp"
+#include "pinocchio/algorithm/aba.hpp"
+#include "pinocchio/algorithm/aba-derivatives.hpp"
+
 #include <ros/ros.h>
 #include <ros/package.h>
 #include <rbdl/addons/urdfreader/urdfreader.h>
@@ -256,7 +262,8 @@ void Dynamics::calcHandC(Model *model, VectorXd &Q, VectorXd &QDot) {
     // Evaluate inertia matrix (H) and velocity terms (C)
     VectorXd QDDot(22);
     QDDot.setZero();
-    InverseDynamics(*model, Q, QDot, QDDot, this->C);
+    // InverseDynamics(*model, Q, QDot, QDDot, this->C);
+    NonlinearEffects(*model,Q,QDot,this->C); // compute Coriolis
     CompositeRigidBodyAlgorithm(*model, Q, this->H, false);
 
     // Add reflected rotor inertias
@@ -272,15 +279,52 @@ void Dynamics::calcHandC(Model *model, VectorXd &Q, VectorXd &QDot) {
     this->H(RightFootPitch,RightFootPitch) += 0.01225;
 } // Dynamics::calcHandC
 
+void Linearizations::initialize(pinocchio::Model *pmodel) {
+    this->A.resize(pmodel->nv, pmodel->nv);
+    this->B.resize(pmodel->nv, pmodel->nv);
+    this->C.resize(pmodel->nv);
+    this->C_tmp.resize(pmodel->nv);
+}
+
+void Linearizations::calcLinearizations(pinocchio::Model *pmodel, VectorXd &Q_bar,VectorXd &QDot_bar, VectorXd &U_bar) {
+    // NonlinearEffects(*model,Q,QDot,this->C); // compute Coriolis
+    // CompositeRigidBodyAlgorithm(*model, Q, this->H, false);    
+
+    // this->H_inv = H.inverse();
+
+    // SymFunction::Df(this->Df, Q_bar, QDot_bar);
+    // this->f = this->H_inv*this->C;
+
+    pinocchio::Data data(*pmodel);
+
+    // Allocate result container
+    Eigen::MatrixXd djoint_acc_dq = Eigen::MatrixXd::Zero(22,22);
+    Eigen::MatrixXd djoint_acc_dv = Eigen::MatrixXd::Zero(22,22);
+    Eigen::MatrixXd djoint_acc_dtau = Eigen::MatrixXd::Zero(22,22);
+
+    computeABADerivatives(*pmodel, data, Q_bar, QDot_bar, U_bar, djoint_acc_dq, djoint_acc_dv, djoint_acc_dtau);
+    this->A << MatrixXd::Zero(23,23), MatrixXd::Identity(23,22), djoint_acc_dq, djoint_acc_dv;
+    this->B = MatrixXd::Zero(23,45), djoint_acc_dtau, MatrixXd::Zero(22,23);
+    aba(*pmodel, data, Q_bar, QDot_bar, U_bar);
+    this->C_tmp << djoint_acc_dq*Q_bar, djoint_acc_dv*QDot_bar;
+    this->C = data.ddq - this->C_tmp;
+}
+
 Cassie::Cassie(bool verbose) {
     // Retreive the path to the robot URDF description
     std::string urdf_path = ros::package::getPath("cassie_description");
     urdf_path.append("/urdf/cassie_v4.urdf");
+
     const char* urdf_path_cstr = urdf_path.c_str();
+    const std::string urdf_path_c = "/home/jreher/cassie_ws/src/cassie_description/urdf/cassie_v4.urdf";
 
     // Construct the RBDL model
     this->model = new RigidBodyDynamics::Model();
     Addons::URDFReadFromFile(urdf_path_cstr, this->model, true, verbose);
+
+    // Construct Pinocchio model
+    this->pmodel = new pinocchio::Model();
+    pinocchio::urdf::buildModel(urdf_path_c,pinocchio::JointModelFreeFlyer(), *(this->pmodel));
 
     // Add the leg loop constraints
     // TODO: This is not fully integrated.
@@ -367,6 +411,7 @@ Cassie::Cassie(bool verbose) {
     // Construct the class members
     this->kinematics.initialize(this->model);
     this->dynamics.initialize(this->model);
+    this->linearizations.initialize(this->pmodel);
 } // Cassie::Cassie
 
 } // namespace cassie_model

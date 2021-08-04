@@ -6,6 +6,7 @@
 #ifndef CASSIE_MODEL_HPP
 #define CASSIE_MODEL_HPP
 
+#include "pinocchio/parsers/urdf.hpp"
 #include <cassie_common_toolbox/CassieStateEnum.hpp>
 #include <cassie_common_toolbox/geometry.hpp>
 #include <rbdl/rbdl.h>
@@ -85,6 +86,20 @@ public:
     void calcHandC(RigidBodyDynamics::Model *model, VectorXd &Q, VectorXd &QDot);
 };
 
+class Linearizations
+{
+public: 
+    Linearizations() {}
+
+    MatrixXd A;
+    MatrixXd B;
+    VectorXd C;
+    VectorXd C_tmp;
+
+    void initialize(pinocchio::Model *model);
+    void calcLinearizations(pinocchio::Model *model, VectorXd &Q_bar, VectorXd &QDot_bar, VectorXd &U_bar);
+};
+
 class Cassie {
 public:
     Eigen::VectorXd q;
@@ -104,8 +119,10 @@ public:
     Eigen::VectorXd GRF;
 
     RigidBodyDynamics::Model         *model;
+    pinocchio::Model                 *pmodel;
     Kinematics                       kinematics;
     Dynamics                         dynamics;
+    Linearizations                   linearizations;
     RigidBodyDynamics::ConstraintSet constraints;
 
     Cassie(bool verbose=false);
