@@ -280,13 +280,12 @@ void Dynamics::calcHandC(Model *model, VectorXd &Q, VectorXd &QDot) {
 } // Dynamics::calcHandC
 
 void Linearizations::initialize(pinocchio::Model *pmodel) {
-    this->A.resize(pmodel->nv, pmodel->nv);
-    this->B.resize(pmodel->nv, pmodel->nv);
-    this->C.resize(pmodel->nv);
-    this->C_tmp.resize(pmodel->nv);
+    this->A.resize(44,44);
+    this->B.resize(44,10);
+    this->C.resize(44);
 }
 
-void Linearizations::calcLinearizations(pinocchio::Model *pmodel, VectorXd &Q_bar,VectorXd &QDot_bar, VectorXd &U_bar) {
+void Linearizations::calcLinearizations(pinocchio::Model *pmodel, VectorXd &Q_bar,VectorXd &QDot_bar, VectorXd &U_bar, MatrixXd Be) {
     // NonlinearEffects(*model,Q,QDot,this->C); // compute Coriolis
     // CompositeRigidBodyAlgorithm(*model, Q, this->H, false);    
 
@@ -295,6 +294,14 @@ void Linearizations::calcLinearizations(pinocchio::Model *pmodel, VectorXd &Q_ba
     // SymFunction::Df(this->Df, Q_bar, QDot_bar);
     // this->f = this->H_inv*this->C;
 
+    Quaterniond q;
+    q = AngleAxisd(Q_bar(3), Vector3d::UnitX())
+        * AngleAxisd(Q_bar(4), Vector3d::UnitY())
+        * AngleAxisd(Q_bar(5), Vector3d::UnitZ());
+
+    VectorXd Q_bar_quat(23);
+    Q_bar_quat << Q_bar.segment(0,3), q.coeffs(), Q_bar.segment(6,16);
+
     pinocchio::Data data(*pmodel);
 
     // Allocate result container
@@ -302,12 +309,11 @@ void Linearizations::calcLinearizations(pinocchio::Model *pmodel, VectorXd &Q_ba
     Eigen::MatrixXd djoint_acc_dv = Eigen::MatrixXd::Zero(22,22);
     Eigen::MatrixXd djoint_acc_dtau = Eigen::MatrixXd::Zero(22,22);
 
-    computeABADerivatives(*pmodel, data, Q_bar, QDot_bar, U_bar, djoint_acc_dq, djoint_acc_dv, djoint_acc_dtau);
-    this->A << MatrixXd::Zero(23,23), MatrixXd::Identity(23,22), djoint_acc_dq, djoint_acc_dv;
-    this->B = MatrixXd::Zero(23,45), djoint_acc_dtau, MatrixXd::Zero(22,23);
-    aba(*pmodel, data, Q_bar, QDot_bar, U_bar);
-    this->C_tmp << djoint_acc_dq*Q_bar, djoint_acc_dv*QDot_bar;
-    this->C = data.ddq - this->C_tmp;
+    computeABADerivatives(*pmodel, data, Q_bar_quat, QDot_bar, Be*U_bar, djoint_acc_dq, djoint_acc_dv, djoint_acc_dtau);
+    this->A << MatrixXd::Zero(22,22), MatrixXd::Identity(22,22), djoint_acc_dq, djoint_acc_dv;
+    this->B << MatrixXd::Zero(22,10), djoint_acc_dtau*Be;
+    aba(*pmodel, data, Q_bar_quat, QDot_bar, Be*U_bar);
+    this->C << Eigen::VectorXd::Zero(22), data.ddq - (djoint_acc_dq*Q_bar + djoint_acc_dv*QDot_bar) - djoint_acc_dtau*Be*U_bar;
 }
 
 Cassie::Cassie(bool verbose) {
