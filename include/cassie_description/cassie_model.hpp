@@ -96,7 +96,7 @@ public:
     VectorXd C;
 
     void initialize(pinocchio::Model *model);
-    void calcLinearizations(pinocchio::Model *model, VectorXd &Q_bar, VectorXd &QDot_bar, VectorXd &U_bar, MatrixXd B);
+    void calcLinearizations(pinocchio::Model *model, VectorXd &Q_bar, VectorXd &QDot_bar, VectorXd &U_bar, MatrixXd B, MatrixXd Jc, MatrixXd dJc);
 };
 
 class Cassie {

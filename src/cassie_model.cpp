@@ -28,6 +28,8 @@
 #include "pinocchio/algorithm/kinematics.hpp"
 #include "pinocchio/algorithm/aba.hpp"
 #include "pinocchio/algorithm/aba-derivatives.hpp"
+#include "pinocchio/algorithm/contact-dynamics.hpp"
+#include "pinocchio/container/aligned-vector.hpp"
 
 #include <ros/ros.h>
 #include <ros/package.h>
@@ -285,7 +287,7 @@ void Linearizations::initialize(pinocchio::Model *pmodel) {
     this->C.resize(44);
 }
 
-void Linearizations::calcLinearizations(pinocchio::Model *pmodel, VectorXd &Q_bar,VectorXd &QDot_bar, VectorXd &U_bar, MatrixXd Be) {
+void Linearizations::calcLinearizations(pinocchio::Model *pmodel, VectorXd &Q_bar,VectorXd &QDot_bar, VectorXd &U_bar, MatrixXd Be, MatrixXd Jc, MatrixXd dJc) {
     // NonlinearEffects(*model,Q,QDot,this->C); // compute Coriolis
     // CompositeRigidBodyAlgorithm(*model, Q, this->H, false);    
 
@@ -302,18 +304,53 @@ void Linearizations::calcLinearizations(pinocchio::Model *pmodel, VectorXd &Q_ba
     VectorXd Q_bar_quat(23);
     Q_bar_quat << Q_bar.segment(0,3), q.coeffs(), Q_bar.segment(6,16);
 
-    pinocchio::Data data(*pmodel);
+    pinocchio::Data data_nonlinear(*pmodel);
+    pinocchio::Data data_jacobian(*pmodel);
 
     // Allocate result container
     Eigen::MatrixXd djoint_acc_dq = Eigen::MatrixXd::Zero(22,22);
     Eigen::MatrixXd djoint_acc_dv = Eigen::MatrixXd::Zero(22,22);
     Eigen::MatrixXd djoint_acc_dtau = Eigen::MatrixXd::Zero(22,22);
 
-    computeABADerivatives(*pmodel, data, Q_bar_quat, QDot_bar, Be*U_bar, djoint_acc_dq, djoint_acc_dv, djoint_acc_dtau);
+    pinocchio::forwardDynamics(*pmodel, data_nonlinear, Q_bar_quat, QDot_bar, Be*U_bar, Jc, dJc*QDot_bar, 1e-12);
+
+    VectorXd lambda = data_nonlinear.lambda_c;
+    VectorXd zero = VectorXd::Zero(6);
+    VectorXd left(6);
+    VectorXd right(6);
+    left << lambda(6),lambda(7),lambda(8),0,lambda(9),lambda(10);
+    right << lambda(11),lambda(12),lambda(13),0,lambda(14),lambda(15);
+
+    pinocchio::Force zeroForce(zero);
+    pinocchio::Force leftForce(left);
+    pinocchio::Force rightForce(right);
+
+    pinocchio::container::aligned_vector<pinocchio::Force> forces;
+    for (int i = 0; i < 9; i ++)
+        forces.push_back(zeroForce);
+    forces.push_back(leftForce);
+    for (int i = 10; i < 17; i ++)
+        forces.push_back(zeroForce);
+    forces.push_back(rightForce);
+
+    // TODO: what is J_rigid??
+    computeABADerivatives(*pmodel, data_jacobian, Q_bar_quat, QDot_bar, Be*U_bar, forces, djoint_acc_dq, djoint_acc_dv, djoint_acc_dtau);
     this->A << MatrixXd::Zero(22,22), MatrixXd::Identity(22,22), djoint_acc_dq, djoint_acc_dv;
     this->B << MatrixXd::Zero(22,10), djoint_acc_dtau*Be;
-    aba(*pmodel, data, Q_bar_quat, QDot_bar, Be*U_bar);
-    this->C << Eigen::VectorXd::Zero(22), data.ddq - (djoint_acc_dq*Q_bar + djoint_acc_dv*QDot_bar) - djoint_acc_dtau*Be*U_bar;
+//    aba(*pmodel, data, Q_bar_quat, QDot_bar, Be*U_bar);
+    this->C << Eigen::VectorXd::Zero(22), data_nonlinear.ddq - (djoint_acc_dq*Q_bar + djoint_acc_dv*QDot_bar) - djoint_acc_dtau*Be*U_bar;
+
+
+    //    pinocchio::aba(*(this->robot->pmodel), data, Q_bar_quat, QDot, this->config.Be*this->cache.u);
+
+    //    pinocchio::computeJointJacobians(*(this->robot->pmodel), data, Q_bar_quat);
+
+    //    MatrixXd Jac = data.J.transpose();
+    //    VectorXd F = Jac.householderQr().solve(this->config.Be*this->cache.u);
+
+    // Compute the robot constraints
+
+//    this->cache.u << torqueScale.cwiseProduct(this->cache.u);
 }
 
 Cassie::Cassie(bool verbose) {
